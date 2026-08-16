@@ -423,35 +423,13 @@ function logEvent(text, level){
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-/* ============ mic level meter (real, via Web Audio) ============ */
-let audioCtx, analyser, micStream, meterRAF;
-function startMicMeter(stream){
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 512;
-  const source = audioCtx.createMediaStreamSource(stream);
-  source.connect(analyser);
-  const data = new Uint8Array(analyser.frequencyBinCount);
-
-  function loop(){
-    analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / data.length);
-    const level = Math.min(rms * 400, 100);
-    setBar('m4', 'm4t', level, level > 6 ? 'HEARING YOU' : 'LISTENING');
-    meterRAF = requestAnimationFrame(loop);
-  }
-  loop();
-}
-function stopMicMeter(){
-  if (meterRAF) cancelAnimationFrame(meterRAF);
-  if (audioCtx) audioCtx.close();
-  setBar('m4', 'm4t', 0, 'IDLE');
-}
+/* ============ mic level indicator ============ */
+/* Simplified: MIC LEVEL now just reflects listening state (idle/listening),
+   not a live amplitude reading. An earlier version opened a second raw
+   microphone stream for a real-time level meter, but running that
+   alongside SpeechRecognition's own mic access caused voice input to
+   fail ("aborted" errors) on some Android browsers — so it was removed
+   in favor of reliable voice recognition. */
 
 /* ============ Google Calendar + Gmail (read-only, Phase 2/3) ============ */
 /* ============ Jem's secure proxy (Cloudflare Worker) ============ */
@@ -682,6 +660,9 @@ if (SpeechRecognitionAPI) {
     recognizing = true;
     hudEl.classList.add('listening');
     document.getElementById('coreCaption').textContent = 'LISTENING...';
+    micAccessEl.textContent = 'GRANTED';
+    micAccessEl.style.color = 'var(--green-core)';
+    setBar('m4', 'm4t', 55, 'LISTENING');
   };
 
   recognition.onresult = (event) => {
@@ -696,17 +677,17 @@ if (SpeechRecognitionAPI) {
       micAccessEl.textContent = 'BLOCKED';
       micAccessEl.style.color = 'var(--red)';
       logEvent('microphone access blocked — check site permissions', 'warn');
-    } else if (event.error !== 'no-speech') {
+    } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
       logEvent('voice input error: ' + event.error, 'warn');
     }
     document.getElementById('coreCaption').textContent = 'TAP CORE TO SPEAK';
-    stopMicMeter();
+    setBar('m4', 'm4t', 0, 'IDLE');
   };
 
   recognition.onend = () => {
     recognizing = false;
     hudEl.classList.remove('listening');
-    stopMicMeter();
+    setBar('m4', 'm4t', 0, 'IDLE');
     if (document.getElementById('coreCaption').textContent === 'LISTENING...') {
       document.getElementById('coreCaption').textContent = 'TAP CORE TO SPEAK';
     }
@@ -716,16 +697,11 @@ if (SpeechRecognitionAPI) {
     if (recognizing) return;
     window.speechSynthesis.cancel();
     micAccessEl.textContent = 'REQUESTED';
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      micAccessEl.textContent = 'GRANTED';
-      micAccessEl.style.color = 'var(--green-core)';
-      startMicMeter(stream);
+    try {
       recognition.start();
-    }).catch(() => {
-      micAccessEl.textContent = 'DENIED';
-      micAccessEl.style.color = 'var(--red)';
-      logEvent('microphone permission denied', 'warn');
-    });
+    } catch (e) {
+      // start() can throw if called again too quickly; safe to ignore
+    }
   }
 
   coreButton.addEventListener('click', startListening);
