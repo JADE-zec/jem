@@ -454,6 +454,10 @@ function stopMicMeter(){
 }
 
 /* ============ Google Calendar + Gmail (read-only, Phase 2/3) ============ */
+/* ============ Jem's secure proxy (Cloudflare Worker) ============ */
+const PROXY_URL = 'https://jem-proxy-worker.babaokathrinajade.workers.dev';
+const ELEVENLABS_VOICE_ID = 'goT3UYdM9bhm0n2lmKQx';
+
 const GOOGLE_CLIENT_ID = '769296491831-ca7n423b9uuflarr5gjq2vincl7ebdnh.apps.googleusercontent.com';
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.readonly';
 
@@ -577,7 +581,7 @@ async function askJem(text){
   const t0 = performance.now();
   try {
     const systemPrompt = await buildSystemPrompt();
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch(PROXY_URL + '/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -610,21 +614,45 @@ async function askJem(text){
   }
 }
 
-function speak(text){
+async function speak(text){
   const hud = document.getElementById('hud');
-  if (!('speechSynthesis' in window)) {
-    document.getElementById('coreCaption').textContent = 'TAP CORE TO SPEAK';
-    return;
-  }
   hud.classList.remove('listening');
   hud.classList.add('speaking');
   document.getElementById('coreCaption').textContent = 'SPEAKING';
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.onend = () => {
+
+  const doneSpeaking = () => {
     hud.classList.remove('speaking');
     document.getElementById('coreCaption').textContent = 'TAP CORE TO SPEAK';
   };
-  utter.onerror = utter.onend;
+
+  try {
+    const res = await fetch(PROXY_URL + '/speak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voiceId: ELEVENLABS_VOICE_ID }),
+    });
+    if (!res.ok) throw new Error('speech proxy error: ' + res.status);
+
+    const audioBlob = await res.blob();
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(audioUrl);
+    audio.onended = doneSpeaking;
+    audio.onerror = doneSpeaking;
+    await audio.play();
+  } catch (err) {
+    logEvent('ElevenLabs voice unavailable — using device voice instead', 'warn');
+    speakWithBrowserVoice(text, doneSpeaking);
+  }
+}
+
+function speakWithBrowserVoice(text, onDone){
+  if (!('speechSynthesis' in window)) {
+    onDone();
+    return;
+  }
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.onend = onDone;
+  utter.onerror = onDone;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utter);
 }
